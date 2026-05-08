@@ -12,13 +12,13 @@ from database.models import VideoAccount, VideoDetail
 from tools import utils
 
 
-def _to_int(value: Any) -> Optional[int]:
+def _to_int(value: Any, default: Optional[int] = None) -> Optional[int]:
     if value in (None, ""):
-        return None
+        return default
     try:
         return int(value)
     except (TypeError, ValueError):
-        return None
+        return default
 
 
 def _to_str(value: Any) -> Optional[str]:
@@ -107,15 +107,15 @@ def _map_account(platform: str, item: Dict) -> Dict[str, Any]:
         ),
         "url": user_url,
         "ip_location": item.get("ip_location"),
-        "total_favorited": _to_int(_first_value(item.get("total_favorited"), item.get("interaction"), item.get("total_liked"))),
+        "total_favorited": _to_int(_first_value(item.get("total_favorited"), item.get("interaction"), item.get("total_liked")), 0),
         "short_id": _first_value(item.get("short_user_id"), item.get("user_unique_id"), item.get("short_id")),
-        "following_count": _to_int(_first_value(item.get("following_count"), item.get("follows"))),
-        "mplatform_followers_count": _to_int(_first_value(item.get("mplatform_followers_count"), item.get("fans"), item.get("total_fans"))),
-        "user_age": _to_int(item.get("user_age")),
+        "following_count": _to_int(_first_value(item.get("following_count"), item.get("follows")), 0),
+        "mplatform_followers_count": _to_int(_first_value(item.get("mplatform_followers_count"), item.get("fans"), item.get("total_fans")), 0),
+        "user_age": _to_int(item.get("user_age"), 0),
         "signature": _first_value(item.get("user_signature"), item.get("signature"), item.get("desc"), item.get("sign")),
         "third_user_id": user_id,
         "avatar": _first_value(item.get("avatar"), item.get("user_avatar")),
-        "aweme_count": _to_int(_first_value(item.get("aweme_count"), item.get("videos_count"))),
+        "aweme_count": _to_int(_first_value(item.get("aweme_count"), item.get("videos_count")), 0),
         "update_time": _now(),
         "del_flag": "0",
         "tenant_id": item.get("tenant_id"),
@@ -138,12 +138,12 @@ def _map_detail(platform: str, item: Dict, account_id: Optional[int]) -> Dict[st
         "nick_name": _first_value(item.get("nickname"), item.get("user_nickname"), item.get("user_name"), item.get("nick_name")),
         "video_cover": _first_value(item.get("cover_url"), item.get("video_cover_url")),
         "work_type": _first_value(item.get("aweme_type"), item.get("video_type"), item.get("type")),
-        "admire_count": _to_str(item.get("admire_count")),
-        "digg_count": _to_str(digg_count),
-        "comment_count": _to_str(comment_count),
-        "collect_count": _to_str(collect_count),
-        "share_count": _to_str(share_count),
-        "view_count": _to_str(view_count),
+        "admire_count": _to_int(item.get("admire_count"), 0),
+        "digg_count": _to_int(digg_count, 0),
+        "comment_count": _to_int(comment_count, 0),
+        "collect_count": _to_int(collect_count, 0),
+        "share_count": _to_int(share_count, 0),
+        "view_count": _to_int(view_count, 0),
         "duration": _to_str(item.get("duration")),
         "topics": _to_str(_first_value(item.get("tag_list"), item.get("topics"))),
         "video_create_time": _to_str(_first_value(item.get("create_time"), item.get("time"), item.get("publish_time"))),
@@ -159,10 +159,10 @@ def _map_detail(platform: str, item: Dict, account_id: Optional[int]) -> Dict[st
             )
         ),
         "author_avatar": _first_value(item.get("avatar"), item.get("user_avatar")),
-        "following_count": _to_str(_first_value(item.get("following_count"), item.get("follows"))),
-        "follower_count": _to_str(_first_value(item.get("follower_count"), item.get("fans"), item.get("total_fans"))),
-        "total_favorited": _to_str(_first_value(item.get("total_favorited"), item.get("interaction"), item.get("total_liked"))),
-        "aweme_count": _to_str(_first_value(item.get("aweme_count"), item.get("videos_count"))),
+        "following_count": _to_int(_first_value(item.get("following_count"), item.get("follows")), 0),
+        "follower_count": _to_int(_first_value(item.get("follower_count"), item.get("fans"), item.get("total_fans")), 0),
+        "total_favorited": _to_int(_first_value(item.get("total_favorited"), item.get("interaction"), item.get("total_liked")), 0),
+        "aweme_count": _to_int(_first_value(item.get("aweme_count"), item.get("videos_count")), 0),
         "tenant_id": item.get("tenant_id", "000000"),
         "del_flag": "0",
         "update_time": _now(),

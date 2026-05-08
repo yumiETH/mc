@@ -21,10 +21,11 @@
 # @Author  : relakkes@gmail.com
 # @Time    : 2024/1/14 18:46
 # @Desc    :
-from typing import List
+from typing import List, Any
 
 import config
 from var import source_keyword_var
+from tools.time_util import get_time_str_from_unix_time
 
 from ._store_impl import *
 from .douyin_store_media import *
@@ -154,6 +155,37 @@ def _extract_music_download_url(aweme_detail: Dict) -> str:
     return music_url
 
 
+def _format_douyin_create_time(create_time: Any) -> str:
+    """
+    Convert Douyin timestamp to formatted datetime string: YYYY-MM-DD HH:mm:ss.
+
+    Notes:
+    - Compatible with second-level / millisecond-level timestamps.
+    - If value is already a non-timestamp string, keep original value.
+    """
+    if create_time in (None, ""):
+        return ""
+
+    # Accept both int and numeric string timestamps.
+    try:
+        return get_time_str_from_unix_time(int(str(create_time).strip()))
+    except (TypeError, ValueError):
+        # Keep original text if it is not a timestamp.
+        return str(create_time)
+
+
+def _to_int(value: Any, default: int = 0) -> int:
+    """
+    Convert value to integer for numeric statistics fields.
+    """
+    if value in (None, ""):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 async def update_douyin_aweme(aweme_item: Dict):
     aweme_id = aweme_item.get("aweme_id")
     user_info = aweme_item.get("author", {})
@@ -163,7 +195,7 @@ async def update_douyin_aweme(aweme_item: Dict):
         "aweme_type": str(aweme_item.get("aweme_type")),
         "title": aweme_item.get("desc", ""),
         "desc": aweme_item.get("desc", ""),
-        "create_time": aweme_item.get("create_time"),
+        "create_time": _format_douyin_create_time(aweme_item.get("create_time")),
         "user_id": user_info.get("uid"),
         "sec_uid": user_info.get("sec_uid"),
         "short_user_id": user_info.get("short_id"),
@@ -171,10 +203,10 @@ async def update_douyin_aweme(aweme_item: Dict):
         "user_signature": user_info.get("signature"),
         "nickname": user_info.get("nickname"),
         "avatar": user_info.get("avatar_thumb", {}).get("url_list", [""])[0],
-        "liked_count": str(interact_info.get("digg_count")),
-        "collected_count": str(interact_info.get("collect_count")),
-        "comment_count": str(interact_info.get("comment_count")),
-        "share_count": str(interact_info.get("share_count")),
+        "liked_count": _to_int(interact_info.get("digg_count")),
+        "collected_count": _to_int(interact_info.get("collect_count")),
+        "comment_count": _to_int(interact_info.get("comment_count")),
+        "share_count": _to_int(interact_info.get("share_count")),
         "ip_location": aweme_item.get("ip_label", ""),
         "last_modify_ts": utils.get_current_timestamp(),
         "aweme_url": f"https://www.douyin.com/video/{aweme_id}",
@@ -206,7 +238,7 @@ async def update_dy_aweme_comment(aweme_id: str, comment_item: Dict):
     avatar_info = (user_info.get("avatar_medium", {}) or user_info.get("avatar_300x300", {}) or user_info.get("avatar_168x168", {}) or user_info.get("avatar_thumb", {}) or {})
     save_comment_item = {
         "comment_id": comment_id,
-        "create_time": comment_item.get("create_time"),
+        "create_time": _format_douyin_create_time(comment_item.get("create_time")),
         "ip_location": comment_item.get("ip_label", ""),
         "aweme_id": aweme_id,
         "content": comment_item.get("text"),
@@ -217,8 +249,8 @@ async def update_dy_aweme_comment(aweme_id: str, comment_item: Dict):
         "user_signature": user_info.get("signature"),
         "nickname": user_info.get("nickname"),
         "avatar": avatar_info.get("url_list", [""])[0],
-        "sub_comment_count": str(comment_item.get("reply_comment_total", 0)),
-        "like_count": (comment_item.get("digg_count") if comment_item.get("digg_count") else 0),
+        "sub_comment_count": _to_int(comment_item.get("reply_comment_total")),
+        "like_count": _to_int(comment_item.get("digg_count")),
         "last_modify_ts": utils.get_current_timestamp(),
         "parent_comment_id": parent_comment_id,
         "pictures": ",".join(_extract_comment_image_list(comment_item)),
