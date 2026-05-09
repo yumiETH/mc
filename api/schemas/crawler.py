@@ -19,6 +19,7 @@
 from enum import Enum
 from typing import Optional, Literal
 from pydantic import BaseModel
+import config
 
 
 class PlatformEnum(str, Enum):
@@ -71,7 +72,7 @@ class CrawlerStartRequest(BaseModel):
     save_option: SaveDataOptionEnum = SaveDataOptionEnum.JSONL
     cookies: str = ""
     headless: bool = False
-    max_notes_count_per_creator: Optional[int] = None
+    max_notes_count_per_creator: Optional[int] = config.CRAWLER_MAX_NOTES_COUNT_PER_CREATOR
     auto_close_browser: Optional[bool] = None
 
 

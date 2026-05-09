@@ -297,9 +297,13 @@ class BrowserLauncher:
             utils.logger.warning(f"[BrowserLauncher] Failed to resolve browser PID by command line: {e}")
             return []
 
-    def _force_kill_windows_browser_by_image_name(self) -> None:
+    def _force_kill_windows_browser_by_image_name(self, allow_force_kill_by_image: bool) -> None:
         """Last-resort Windows cleanup for dedicated crawler machines."""
-        if self.system != "Windows" or not config.WINDOWS_FORCE_KILL_BROWSER_BY_IMAGE_NAME:
+        if (
+            self.system != "Windows"
+            or not allow_force_kill_by_image
+            or not config.WINDOWS_FORCE_KILL_BROWSER_BY_IMAGE_NAME
+        ):
             return
 
         image_name = "chrome.exe"
@@ -366,19 +370,19 @@ class BrowserLauncher:
         except Exception:
             return "Unknown Browser", "Unknown Version"
 
-    def cleanup(self):
+    def cleanup(self, allow_force_kill_by_image: bool = True):
         """
         Cleanup resources, close browser process
         """
         if not self.browser_process and not self._is_debug_port_alive():
             pids = self._find_windows_browser_pids_by_commandline()
             if not pids:
-                self._force_kill_windows_browser_by_image_name()
+                self._force_kill_windows_browser_by_image_name(allow_force_kill_by_image)
                 return
 
             utils.logger.info(f"[BrowserLauncher] Killing browser by command-line PIDs: {pids}")
             self._kill_windows_pids(pids)
-            self._force_kill_windows_browser_by_image_name()
+            self._force_kill_windows_browser_by_image_name(allow_force_kill_by_image)
             return
 
         process = self.browser_process
@@ -388,7 +392,7 @@ class BrowserLauncher:
                 pids = self._find_windows_browser_pids_by_commandline()
                 if not pids:
                     utils.logger.info("[BrowserLauncher] Browser process already exited, no cleanup needed")
-                    self._force_kill_windows_browser_by_image_name()
+                    self._force_kill_windows_browser_by_image_name(allow_force_kill_by_image)
                     self.browser_process = None
                     return
 
@@ -396,7 +400,7 @@ class BrowserLauncher:
                     "[BrowserLauncher] Launcher process exited but browser command-line markers are still alive"
                 )
                 self._kill_windows_pids(pids)
-                self._force_kill_windows_browser_by_image_name()
+                self._force_kill_windows_browser_by_image_name(allow_force_kill_by_image)
                 self.browser_process = None
                 return
             utils.logger.warning(
@@ -427,7 +431,7 @@ class BrowserLauncher:
                 if commandline_pids:
                     utils.logger.info(f"[BrowserLauncher] Killing remaining browser command-line PIDs: {commandline_pids}")
                     self._kill_windows_pids(commandline_pids)
-                self._force_kill_windows_browser_by_image_name()
+                self._force_kill_windows_browser_by_image_name(allow_force_kill_by_image)
             else:
                 pgid = os.getpgid(process.pid)
                 try:

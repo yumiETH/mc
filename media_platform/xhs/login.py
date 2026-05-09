@@ -19,11 +19,11 @@
 
 
 import asyncio
-import functools
 import sys
 from typing import Optional
 
 from playwright.async_api import BrowserContext, Page
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from tenacity import (RetryError, retry, retry_if_result, stop_after_attempt,
                       wait_fixed)
 
@@ -96,6 +96,42 @@ class XiaoHongShuLogin(AbstractLogin):
         else:
             raise ValueError("[XiaoHongShuLogin.begin]I nvalid Login Type Currently only supported qrcode or phone or cookies ...")
 
+    async def _open_login_dialog_if_needed(self) -> None:
+        """Open the login dialog when Xiaohongshu does not show it automatically."""
+        login_container_selector = "div.login-container"
+        try:
+            await self.context_page.wait_for_selector(login_container_selector, timeout=3000)
+            return
+        except PlaywrightTimeoutError:
+            pass
+
+        login_button_selectors = [
+            "xpath=//*[@id='app']/div[1]/div[2]/div[1]/ul/div[1]/button",
+            "button:has-text('登录')",
+            "text=登录",
+        ]
+        for selector in login_button_selectors:
+            try:
+                login_button_ele = self.context_page.locator(selector).first
+                await login_button_ele.click(timeout=5000)
+                await self.context_page.wait_for_selector(login_container_selector, timeout=10000)
+                return
+            except Exception:
+                continue
+
+    async def _find_login_qrcode(self) -> str:
+        qrcode_selectors = [
+            "xpath=//img[contains(@class, 'qrcode-img')]",
+            "div.login-container img.qrcode-img",
+            "div.login-container img[src^='data:image']",
+            "div.login-container img",
+        ]
+        for selector in qrcode_selectors:
+            base64_qrcode_img = await utils.find_login_qrcode(self.context_page, selector=selector)
+            if base64_qrcode_img:
+                return base64_qrcode_img
+        return ""
+
     async def login_by_mobile(self):
         """Login xiaohongshu by mobile"""
         utils.logger.info("[XiaoHongShuLogin.login_by_mobile] Begin login xiaohongshu by mobile ...")
@@ -167,37 +203,19 @@ class XiaoHongShuLogin(AbstractLogin):
     async def login_by_qrcode(self):
         """login xiaohongshu website and keep webdriver login state"""
         utils.logger.info("[XiaoHongShuLogin.login_by_qrcode] Begin login xiaohongshu by qrcode ...")
-        # login_selector = "div.login-container > div.left > div.qrcode > img"
-        qrcode_img_selector = "xpath=//img[@class='qrcode-img']"
-        # find login qrcode
-        base64_qrcode_img = await utils.find_login_qrcode(
-            self.context_page,
-            selector=qrcode_img_selector
-        )
+        await self._open_login_dialog_if_needed()
+        base64_qrcode_img = await self._find_login_qrcode()
         if not base64_qrcode_img:
             utils.logger.info("[XiaoHongShuLogin.login_by_qrcode] login failed , have not found qrcode please check ....")
-            # if this website does not automatically popup login dialog box, we will manual click login button
-            await asyncio.sleep(0.5)
-            login_button_ele = self.context_page.locator("xpath=//*[@id='app']/div[1]/div[2]/div[1]/ul/div[1]/button")
-            await login_button_ele.click()
-            base64_qrcode_img = await utils.find_login_qrcode(
-                self.context_page,
-                selector=qrcode_img_selector
-            )
-            if not base64_qrcode_img:
-                sys.exit()
+            sys.exit()
 
         # get not logged session
         current_cookie = await self.browser_context.cookies()
         _, cookie_dict = utils.convert_cookies(current_cookie)
         no_logged_in_session = cookie_dict.get("web_session")
 
-        # show login qrcode
-        # fix issue #12
-        # we need to use partial function to call show_qrcode function and run in executor
-        # then current asyncio event loop will not be blocked
-        partial_show_qrcode = functools.partial(utils.show_qrcode, base64_qrcode_img)
-        asyncio.get_running_loop().run_in_executor(executor=None, func=partial_show_qrcode)
+        if config.LOGIN_TYPE == "qrcode":
+            utils.show_qrcode(base64_qrcode_img)
 
         utils.logger.info(f"[XiaoHongShuLogin.login_by_qrcode] waiting for scan code login, remaining time is 120s")
         try:

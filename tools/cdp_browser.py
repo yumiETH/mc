@@ -422,7 +422,7 @@ class CDPBrowserManager:
                 return []
         return []
 
-    async def cleanup(self, force: bool = False):
+    async def cleanup(self, force: bool = False, allow_force_kill_by_image: bool = True):
         """
         Cleanup resources
 
@@ -466,7 +466,7 @@ class CDPBrowserManager:
                 and self.launcher
             )
             if should_cleanup_process:
-                self.launcher.cleanup()
+                self.launcher.cleanup(allow_force_kill_by_image=allow_force_kill_by_image)
 
             # Disconnect browser
             if self.browser:

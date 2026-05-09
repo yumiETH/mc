@@ -198,8 +198,9 @@ class VideoAccount(Base):
     update_time = Column(DateTime, comment='更新时间')
     update_by = Column(String(64), default='', comment='创建人')
     del_flag = Column(String(1), default='0', comment='删除标志')
-    tenant_id = Column(String(40), comment='租户id')
+    tenant_id = Column(String(40), default='000000', comment='租户id')
     create_dept = Column(BigInteger, comment='创建部门')
+    type = Column(String(255), comment='平台类型')
 
 
 class VideoDetail(Base):

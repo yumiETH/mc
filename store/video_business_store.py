@@ -118,7 +118,8 @@ def _map_account(platform: str, item: Dict) -> Dict[str, Any]:
         "aweme_count": _to_int(_first_value(item.get("aweme_count"), item.get("videos_count")), 0),
         "update_time": _now(),
         "del_flag": "0",
-        "tenant_id": item.get("tenant_id"),
+        "tenant_id": item.get("tenant_id", "000000"),
+        "type": platform,
     }
 
 

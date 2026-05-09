@@ -396,7 +396,7 @@ class DouYinCrawler(AbstractCrawler):
             # Ensure launched CDP resources are cleaned before fallback to avoid duplicate browsers.
             if self.cdp_manager:
                 try:
-                    await self.cdp_manager.cleanup(force=True)
+                    await self.cdp_manager.cleanup(force=True, allow_force_kill_by_image=False)
                 except Exception:
                     pass
                 finally:

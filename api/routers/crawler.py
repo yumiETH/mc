@@ -40,7 +40,7 @@ async def start_crawler(request: CrawlerStartRequest):
     qrcode = None
     qrcode_status = "not_required"
     if request.login_type.value == "qrcode" and not request.cookies:
-        qrcode = await crawler_manager.wait_for_qrcode(platform=request.platform.value)
+        qrcode = await crawler_manager.wait_for_qrcode(timeout_seconds=120.0, platform=request.platform.value)
         if qrcode:
             qrcode_status = "ready"
         elif crawler_manager.is_qrcode_pending(platform=request.platform.value):
