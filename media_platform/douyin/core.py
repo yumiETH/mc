@@ -377,18 +377,30 @@ class DouYinCrawler(AbstractCrawler):
                 user_agent=user_agent,
                 headless=headless,
             )
+            # Best-effort steps after CDP connection succeeds.
+            # Do not fall back to standard mode here, otherwise a second browser may be launched.
+            try:
+                await self.cdp_manager.add_stealth_script()
+            except Exception as stealth_err:
+                utils.logger.warning(f"[DouYinCrawler] CDP添加反检测脚本失败，继续运行: {stealth_err}")
 
-            # Add anti-detection script
-            await self.cdp_manager.add_stealth_script()
-
-            # Show browser information
-            browser_info = await self.cdp_manager.get_browser_info()
-            utils.logger.info(f"[DouYinCrawler] CDP浏览器信息: {browser_info}")
-
+            try:
+                browser_info = await self.cdp_manager.get_browser_info()
+                utils.logger.info(f"[DouYinCrawler] CDP浏览器信息: {browser_info}")
+            except Exception as info_err:
+                utils.logger.warning(f"[DouYinCrawler] 获取CDP浏览器信息失败，继续运行: {info_err}")
             return browser_context
 
         except Exception as e:
             utils.logger.error(f"[DouYinCrawler] CDP模式启动失败，回退到标准模式: {e}")
+            # Ensure launched CDP resources are cleaned before fallback to avoid duplicate browsers.
+            if self.cdp_manager:
+                try:
+                    await self.cdp_manager.cleanup(force=True)
+                except Exception:
+                    pass
+                finally:
+                    self.cdp_manager = None
             # Fall back to standard mode
             chromium = playwright.chromium
             return await self.launch_browser(chromium, playwright_proxy, user_agent, headless)
