@@ -460,6 +460,14 @@ class CDPBrowserManager:
                 finally:
                     self.browser_context = None
 
+            should_cleanup_process = (
+                not config.CDP_CONNECT_EXISTING
+                and (force or config.AUTO_CLOSE_BROWSER)
+                and self.launcher
+            )
+            if should_cleanup_process:
+                self.launcher.cleanup()
+
             # Disconnect browser
             if self.browser:
                 try:
@@ -486,13 +494,8 @@ class CDPBrowserManager:
                 utils.logger.info(
                     "[CDPBrowserManager] Connected to existing browser, skipping process cleanup"
                 )
-            elif force or config.AUTO_CLOSE_BROWSER:
-                # force=True means force close, ignoring AUTO_CLOSE_BROWSER config
-                # Used for handling abnormal exit or manual cleanup
-                if self.launcher and self.launcher.browser_process:
-                    self.launcher.cleanup()
-                else:
-                    utils.logger.debug("[CDPBrowserManager] No browser process to cleanup")
+            elif should_cleanup_process:
+                utils.logger.info("[CDPBrowserManager] Browser process cleanup requested")
             else:
                 utils.logger.info(
                     "[CDPBrowserManager] Browser process kept running (AUTO_CLOSE_BROWSER=False)"

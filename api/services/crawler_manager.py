@@ -9,6 +9,7 @@
 import asyncio
 import json
 import os
+import platform as platform_module
 import signal
 import subprocess
 import uuid
@@ -213,6 +214,11 @@ class CrawlerManager:
             await self._push_log(entry)
 
             try:
+                creationflags = (
+                    subprocess.CREATE_NEW_PROCESS_GROUP
+                    if platform_module.system() == "Windows"
+                    else 0
+                )
                 state.process = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
@@ -228,6 +234,7 @@ class CrawlerManager:
                         "MEDIACRAWLER_TASK_ID": state.task_id,
                         "MEDIACRAWLER_TASK_PLATFORM": platform,
                     },
+                    creationflags=creationflags,
                 )
                 state.status = "running"
                 state.started_at = datetime.now()
@@ -268,7 +275,10 @@ class CrawlerManager:
             await self._push_log(entry)
 
             try:
-                state.process.send_signal(signal.SIGTERM)
+                if platform_module.system() == "Windows":
+                    state.process.send_signal(signal.CTRL_BREAK_EVENT)
+                else:
+                    state.process.send_signal(signal.SIGTERM)
 
                 for _ in range(30):
                     if state.process.poll() is not None:

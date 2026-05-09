@@ -28,6 +28,7 @@ from typing import Optional, List, Tuple
 import asyncio
 from pathlib import Path
 
+import config
 from tools import utils
 
 
@@ -41,6 +42,8 @@ class BrowserLauncher:
         self.system = platform.system()
         self.browser_process = None
         self.debug_port = None
+        self.user_data_dir = None
+        self.browser_path = None
 
     def detect_browser_paths(self) -> List[str]:
         """
@@ -164,6 +167,8 @@ class BrowserLauncher:
         utils.logger.info(f"[BrowserLauncher] Debug port: {debug_port}")
         utils.logger.info(f"[BrowserLauncher] Headless mode: {headless}")
         self.debug_port = debug_port
+        self.user_data_dir = user_data_dir
+        self.browser_path = browser_path
 
         try:
             # On Windows, use CREATE_NEW_PROCESS_GROUP to prevent Ctrl+C from affecting subprocess
@@ -244,6 +249,73 @@ class BrowserLauncher:
 
         return None
 
+    @staticmethod
+    def _powershell_literal(value: str) -> str:
+        return "'" + value.replace("'", "''") + "'"
+
+    def _find_windows_browser_pids_by_commandline(self) -> List[int]:
+        """Find Chrome/Edge processes launched for this task by command line markers."""
+        if self.system != "Windows":
+            return []
+
+        markers = []
+        if self.debug_port:
+            markers.append(f"--remote-debugging-port={self.debug_port}")
+        if self.user_data_dir:
+            markers.append(f"--user-data-dir={self.user_data_dir}")
+
+        if not markers:
+            return []
+
+        marker_filter = " -or ".join(
+            f"$_.CommandLine -like {self._powershell_literal('*' + marker + '*')}"
+            for marker in markers
+        )
+        command = (
+            "Get-CimInstance Win32_Process | "
+            "Where-Object { $_.CommandLine -and ($_.Name -match '^(chrome|msedge)\\.exe$') -and "
+            f"({marker_filter})"
+            " } | Select-Object -ExpandProperty ProcessId"
+        )
+
+        try:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", command],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="ignore",
+                timeout=10,
+            )
+            pids = []
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if line.isdigit():
+                    pids.append(int(line))
+            return pids
+        except Exception as e:
+            utils.logger.warning(f"[BrowserLauncher] Failed to resolve browser PID by command line: {e}")
+            return []
+
+    def _force_kill_windows_browser_by_image_name(self) -> None:
+        """Last-resort Windows cleanup for dedicated crawler machines."""
+        if self.system != "Windows" or not config.WINDOWS_FORCE_KILL_BROWSER_BY_IMAGE_NAME:
+            return
+
+        image_name = "chrome.exe"
+        if self.browser_path and "edge" in self.browser_path.lower():
+            image_name = "msedge.exe"
+
+        utils.logger.warning(f"[BrowserLauncher] Force killing all Windows browser processes by image: {image_name}")
+        subprocess.run(
+            ["taskkill", "/F", "/IM", image_name],
+            capture_output=True,
+            check=False,
+            encoding="utf-8",
+            errors="ignore",
+            text=True,
+        )
+
     def wait_for_browser_ready(self, debug_port: int, timeout: int = 30) -> bool:
         """
         Wait for browser to be ready
@@ -298,14 +370,33 @@ class BrowserLauncher:
         """
         Cleanup resources, close browser process
         """
-        if not self.browser_process:
+        if not self.browser_process and not self._is_debug_port_alive():
+            pids = self._find_windows_browser_pids_by_commandline()
+            if not pids:
+                self._force_kill_windows_browser_by_image_name()
+                return
+
+            utils.logger.info(f"[BrowserLauncher] Killing browser by command-line PIDs: {pids}")
+            self._kill_windows_pids(pids)
+            self._force_kill_windows_browser_by_image_name()
             return
 
         process = self.browser_process
 
-        if process.poll() is not None:
+        if process and process.poll() is not None:
             if not self._is_debug_port_alive():
-                utils.logger.info("[BrowserLauncher] Browser process already exited, no cleanup needed")
+                pids = self._find_windows_browser_pids_by_commandline()
+                if not pids:
+                    utils.logger.info("[BrowserLauncher] Browser process already exited, no cleanup needed")
+                    self._force_kill_windows_browser_by_image_name()
+                    self.browser_process = None
+                    return
+
+                utils.logger.warning(
+                    "[BrowserLauncher] Launcher process exited but browser command-line markers are still alive"
+                )
+                self._kill_windows_pids(pids)
+                self._force_kill_windows_browser_by_image_name()
                 self.browser_process = None
                 return
             utils.logger.warning(
@@ -317,32 +408,26 @@ class BrowserLauncher:
 
         try:
             if self.system == "Windows":
-                pid_to_kill = process.pid if process.poll() is None else self._find_pid_by_port()
-                if process.poll() is None:
+                pid_to_kill = process.pid if process and process.poll() is None else self._find_pid_by_port()
+                if process and process.poll() is None:
                     process.terminate()
                     try:
                         process.wait(timeout=5)
                     except subprocess.TimeoutExpired:
                         utils.logger.warning("[BrowserLauncher] Normal termination timeout, using taskkill to force kill")
-                        subprocess.run(
-                            ["taskkill", "/F", "/T", "/PID", str(process.pid)],
-                            capture_output=True,
-                            check=False,
-                            encoding='utf-8',
-                            errors='ignore'
-                        )
+                        self._kill_windows_pids([process.pid])
                         process.wait(timeout=5)
                 elif pid_to_kill:
                     utils.logger.info(f"[BrowserLauncher] Killing browser by debug-port PID: {pid_to_kill}")
-                    subprocess.run(
-                        ["taskkill", "/F", "/T", "/PID", str(pid_to_kill)],
-                        capture_output=True,
-                        check=False,
-                        encoding='utf-8',
-                        errors='ignore'
-                    )
+                    self._kill_windows_pids([pid_to_kill])
                 else:
                     utils.logger.warning("[BrowserLauncher] Could not resolve browser PID from debug port")
+
+                commandline_pids = self._find_windows_browser_pids_by_commandline()
+                if commandline_pids:
+                    utils.logger.info(f"[BrowserLauncher] Killing remaining browser command-line PIDs: {commandline_pids}")
+                    self._kill_windows_pids(commandline_pids)
+                self._force_kill_windows_browser_by_image_name()
             else:
                 pgid = os.getpgid(process.pid)
                 try:
@@ -362,3 +447,14 @@ class BrowserLauncher:
             utils.logger.warning(f"[BrowserLauncher] Error closing browser process: {e}")
         finally:
             self.browser_process = None
+
+    @staticmethod
+    def _kill_windows_pids(pids: List[int]) -> None:
+        for pid in set(pids):
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                capture_output=True,
+                check=False,
+                encoding="utf-8",
+                errors="ignore",
+            )

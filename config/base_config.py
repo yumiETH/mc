@@ -82,6 +82,10 @@ CDP_CONNECT_EXISTING = False
 # 设置为 False 可以保持浏览器运行，方便调试
 AUTO_CLOSE_BROWSER = True
 
+# Windows CDP 模式下 Chrome 可能残留子进程，精确清理失败时按浏览器进程名兜底强杀。
+# 注意：开启后会关闭当前用户所有同名 Chrome/Edge 进程，建议仅在专用采集机器上使用。
+WINDOWS_FORCE_KILL_BROWSER_BY_IMAGE_NAME = True
+
 # Data saving type option configuration, supports: csv, db, json, jsonl, sqlite, excel, postgres. It is best to save to DB, with deduplication function.
 SAVE_DATA_OPTION = "jsonl"  # csv or db or json or jsonl or sqlite or excel or postgres
 
