@@ -20,6 +20,7 @@
 
 import os
 import platform
+import re
 import subprocess
 import time
 import socket
@@ -163,6 +164,7 @@ class BrowserLauncher:
         utils.logger.info(f"[BrowserLauncher] Launching browser: {browser_path}")
         utils.logger.info(f"[BrowserLauncher] Debug port: {debug_port}")
         utils.logger.info(f"[BrowserLauncher] Headless mode: {headless}")
+        self.debug_port = debug_port
 
         try:
             # On Windows, use CREATE_NEW_PROCESS_GROUP to prevent Ctrl+C from affecting subprocess
@@ -187,6 +189,57 @@ class BrowserLauncher:
         except Exception as e:
             utils.logger.error(f"[BrowserLauncher] Failed to launch browser: {e}")
             raise
+
+    def _is_debug_port_alive(self) -> bool:
+        """Check whether the CDP debug port is still being listened on."""
+        if not self.debug_port:
+            return False
+
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(1)
+                return s.connect_ex(("localhost", self.debug_port)) == 0
+        except Exception:
+            return False
+
+    def _find_pid_by_port(self) -> Optional[int]:
+        """Find the process PID currently listening on the configured debug port."""
+        if not self.debug_port:
+            return None
+
+        try:
+            if self.system == "Windows":
+                result = subprocess.run(
+                    ["netstat", "-ano"],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="ignore",
+                    timeout=10,
+                )
+                port_pattern = re.compile(
+                    rf"^\s*TCP\s+127\.0\.0\.1:{self.debug_port}\s+.*LISTENING\s+(\d+)\s*$",
+                    re.MULTILINE,
+                )
+                match = port_pattern.search(result.stdout)
+                if match:
+                    return int(match.group(1))
+            else:
+                result = subprocess.run(
+                    ["lsof", "-ti", f"tcp:{self.debug_port}"],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="ignore",
+                    timeout=10,
+                )
+                pid_text = result.stdout.strip().splitlines()
+                if pid_text:
+                    return int(pid_text[0])
+        except Exception as e:
+            utils.logger.warning(f"[BrowserLauncher] Failed to resolve PID by debug port: {e}")
+
+        return None
 
     def wait_for_browser_ready(self, debug_port: int, timeout: int = 30) -> bool:
         """
@@ -248,28 +301,45 @@ class BrowserLauncher:
         process = self.browser_process
 
         if process.poll() is not None:
-            utils.logger.info("[BrowserLauncher] Browser process already exited, no cleanup needed")
-            self.browser_process = None
-            return
+            if not self._is_debug_port_alive():
+                utils.logger.info("[BrowserLauncher] Browser process already exited, no cleanup needed")
+                self.browser_process = None
+                return
+            utils.logger.warning(
+                "[BrowserLauncher] Launcher process exited but debug port is still alive, "
+                "will try to terminate the real browser process by port"
+            )
 
         utils.logger.info("[BrowserLauncher] Closing browser process...")
 
         try:
             if self.system == "Windows":
-                # First try normal termination
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    utils.logger.warning("[BrowserLauncher] Normal termination timeout, using taskkill to force kill")
+                pid_to_kill = process.pid if process.poll() is None else self._find_pid_by_port()
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        utils.logger.warning("[BrowserLauncher] Normal termination timeout, using taskkill to force kill")
+                        subprocess.run(
+                            ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                            capture_output=True,
+                            check=False,
+                            encoding='utf-8',
+                            errors='ignore'
+                        )
+                        process.wait(timeout=5)
+                elif pid_to_kill:
+                    utils.logger.info(f"[BrowserLauncher] Killing browser by debug-port PID: {pid_to_kill}")
                     subprocess.run(
-                        ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                        ["taskkill", "/F", "/T", "/PID", str(pid_to_kill)],
                         capture_output=True,
                         check=False,
                         encoding='utf-8',
                         errors='ignore'
                     )
-                    process.wait(timeout=5)
+                else:
+                    utils.logger.warning("[BrowserLauncher] Could not resolve browser PID from debug port")
             else:
                 pgid = os.getpgid(process.pid)
                 try:
