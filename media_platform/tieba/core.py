@@ -388,7 +388,7 @@ class TieBaCrawler(AbstractCrawler):
                         creator_url=creator_url,
                         crawl_interval=0,
                         callback=tieba_store.batch_update_tieba_notes,
-                        max_note_count=config.CRAWLER_MAX_NOTES_COUNT,
+                        max_note_count=config.CRAWLER_MAX_NOTES_COUNT_PER_CREATOR,
                     )
                 )
 

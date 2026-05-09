@@ -331,7 +331,12 @@ class DouYinClient(AbstractApiClient, ProxyRefreshMixin):
         }
         return await self.get(uri, params)
 
-    async def get_all_user_aweme_posts(self, sec_user_id: str, callback: Optional[Callable] = None):
+    async def get_all_user_aweme_posts(
+        self,
+        sec_user_id: str,
+        callback: Optional[Callable] = None,
+        max_count: int = 0,
+    ):
         posts_has_more = 1
         max_cursor = ""
         result = []
@@ -340,10 +345,18 @@ class DouYinClient(AbstractApiClient, ProxyRefreshMixin):
             posts_has_more = aweme_post_res.get("has_more", 0)
             max_cursor = aweme_post_res.get("max_cursor")
             aweme_list = aweme_post_res.get("aweme_list") if aweme_post_res.get("aweme_list") else []
+
+            # Apply per-account limit for creator mode.
+            if max_count > 0 and len(result) + len(aweme_list) > max_count:
+                aweme_list = aweme_list[: max_count - len(result)]
+
             utils.logger.info(f"[DouYinClient.get_all_user_aweme_posts] get sec_user_id:{sec_user_id} video len : {len(aweme_list)}")
             if callback:
                 await callback(aweme_list)
             result.extend(aweme_list)
+
+            if max_count > 0 and len(result) >= max_count:
+                break
         return result
 
     async def get_aweme_media(self, url: str) -> Union[bytes, None]:

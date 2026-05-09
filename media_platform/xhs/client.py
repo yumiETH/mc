@@ -599,6 +599,7 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
         callback: Optional[Callable] = None,
         xsec_token: str = "",
         xsec_source: str = "pc_feed",
+        max_count: int = 0,
     ) -> List[Dict]:
         """
         Get all posts published by specified user, this method will continuously find all post information under a user
@@ -615,7 +616,8 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
         result = []
         notes_has_more = True
         notes_cursor = ""
-        while notes_has_more and len(result) < config.CRAWLER_MAX_NOTES_COUNT:
+        creator_limit = max_count if max_count > 0 else config.CRAWLER_MAX_NOTES_COUNT
+        while notes_has_more and len(result) < creator_limit:
             notes_res = await self.get_notes_by_creator(
                 user_id, notes_cursor, xsec_token=xsec_token, xsec_source=xsec_source
             )
@@ -638,7 +640,7 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
                 f"[XiaoHongShuClient.get_all_notes_by_creator] got user_id:{user_id} notes len : {len(notes)}"
             )
 
-            remaining = config.CRAWLER_MAX_NOTES_COUNT - len(result)
+            remaining = creator_limit - len(result)
             if remaining <= 0:
                 break
 

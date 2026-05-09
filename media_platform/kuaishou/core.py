@@ -418,6 +418,7 @@ class KuaishouCrawler(AbstractCrawler):
                 user_id=user_id,
                 crawl_interval=config.CRAWLER_MAX_SLEEP_SEC,
                 callback=self.fetch_creator_video_detail,
+                max_count=config.CRAWLER_MAX_NOTES_COUNT_PER_CREATOR,
             )
 
             video_ids = [

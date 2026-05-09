@@ -285,6 +285,7 @@ class ZhihuCrawler(AbstractCrawler):
                 creator=createor_info,
                 crawl_interval=config.CRAWLER_MAX_SLEEP_SEC,
                 callback=zhihu_store.batch_update_zhihu_contents,
+                max_count=config.CRAWLER_MAX_NOTES_COUNT_PER_CREATOR,
             )
 
             # Get all articles of the creator's contents

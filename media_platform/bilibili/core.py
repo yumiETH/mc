@@ -123,7 +123,10 @@ class BilibiliCrawler(AbstractCrawler):
                         try:
                             creator_info = parse_creator_info_from_url(creator_url)
                             utils.logger.info(f"[BilibiliCrawler.start] Parsed creator ID: {creator_info.creator_id} from {creator_url}")
-                            await self.get_creator_videos(int(creator_info.creator_id))
+                            await self.get_creator_videos(
+                                int(creator_info.creator_id),
+                                max_count=config.CRAWLER_MAX_NOTES_COUNT_PER_CREATOR,
+                            )
                         except ValueError as e:
                             utils.logger.error(f"[BilibiliCrawler.start] Failed to parse creator URL: {e}")
                             continue
@@ -367,17 +370,26 @@ class BilibiliCrawler(AbstractCrawler):
                 # Propagate the exception to be caught by the main loop
                 raise
 
-    async def get_creator_videos(self, creator_id: int):
+    async def get_creator_videos(self, creator_id: int, max_count: int = 0):
         """
         get videos for a creator
         :return:
         """
         ps = 30
         pn = 1
+        fetched_count = 0
         while True:
             result = await self.bili_client.get_creator_videos(creator_id, pn, ps)
             video_bvids_list = [video["bvid"] for video in result["list"]["vlist"]]
+            if max_count > 0:
+                remain_count = max_count - fetched_count
+                if remain_count <= 0:
+                    break
+                video_bvids_list = video_bvids_list[:remain_count]
             await self.get_specified_videos(video_bvids_list)
+            fetched_count += len(video_bvids_list)
+            if max_count > 0 and fetched_count >= max_count:
+                break
             if int(result["page"]["count"]) <= pn * ps:
                 break
             await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)

@@ -97,6 +97,10 @@ START_PAGE = 1
 # Control the number of crawled videos/posts
 CRAWLER_MAX_NOTES_COUNT = 15
 
+# In creator mode, limit the number of notes/videos crawled per account across all platforms.
+# Set <= 0 to disable this limit.
+CRAWLER_MAX_NOTES_COUNT_PER_CREATOR = 30
+
 # Controlling the number of concurrent crawlers
 MAX_CONCURRENCY_NUM = 1
 

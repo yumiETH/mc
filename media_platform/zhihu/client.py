@@ -459,7 +459,13 @@ class ZhiHuClient(AbstractApiClient, ProxyRefreshMixin):
         }
         return await self.get(uri, params)
 
-    async def get_all_anwser_by_creator(self, creator: ZhihuCreator, crawl_interval: float = 1.0, callback: Optional[Callable] = None) -> List[ZhihuContent]:
+    async def get_all_anwser_by_creator(
+        self,
+        creator: ZhihuCreator,
+        crawl_interval: float = 1.0,
+        callback: Optional[Callable] = None,
+        max_count: int = 0,
+    ) -> List[ZhihuContent]:
         """
         Get all answers by creator
         Args:
@@ -474,7 +480,7 @@ class ZhiHuClient(AbstractApiClient, ProxyRefreshMixin):
         is_end: bool = False
         offset: int = 0
         limit: int = 20
-        while not is_end:
+        while not is_end and (max_count <= 0 or len(all_contents) < max_count):
             res = await self.get_creator_answers(creator.url_token, offset, limit)
             if not res:
                 break
@@ -482,6 +488,8 @@ class ZhiHuClient(AbstractApiClient, ProxyRefreshMixin):
             paging_info = res.get("paging", {})
             is_end = paging_info.get("is_end")
             contents = self._extractor.extract_content_list_from_creator(res.get("data"))
+            if max_count > 0 and len(all_contents) + len(contents) > max_count:
+                contents = contents[: max_count - len(all_contents)]
             if callback:
                 await callback(contents)
             all_contents.extend(contents)

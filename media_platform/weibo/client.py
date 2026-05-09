@@ -375,6 +375,7 @@ class WeiboClient(ProxyRefreshMixin):
         container_id: str,
         crawl_interval: float = 1.0,
         callback: Optional[Callable] = None,
+        max_count: int = 0,
     ) -> List[Dict]:
         """
         Get all posts published by a specified user, this method will continuously fetch all posts from a user
@@ -391,7 +392,7 @@ class WeiboClient(ProxyRefreshMixin):
         notes_has_more = True
         since_id = ""
         crawler_total_count = 0
-        while notes_has_more:
+        while notes_has_more and (max_count <= 0 or len(result) < max_count):
             notes_res = await self.get_notes_by_creator(creator_id, container_id, since_id)
             if not notes_res:
                 utils.logger.error(f"[WeiboClient.get_notes_by_creator] The current creator may have been banned by Weibo, so they cannot access the data.")
@@ -404,6 +405,8 @@ class WeiboClient(ProxyRefreshMixin):
             notes = notes_res["cards"]
             utils.logger.info(f"[WeiboClient.get_all_notes_by_creator] got user_id:{creator_id} notes len : {len(notes)}")
             notes = [note for note in notes if note.get("card_type") == 9]
+            if max_count > 0 and len(result) + len(notes) > max_count:
+                notes = notes[: max_count - len(result)]
             if callback:
                 await callback(notes)
             await asyncio.sleep(crawl_interval)

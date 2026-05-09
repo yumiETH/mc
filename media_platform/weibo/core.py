@@ -328,6 +328,7 @@ class WeiboCrawler(AbstractCrawler):
                     container_id=f"107603{user_id}",
                     crawl_interval=0,
                     callback=save_notes_with_full_text,
+                    max_count=config.CRAWLER_MAX_NOTES_COUNT_PER_CREATOR,
                 )
 
                 note_ids = [note_item.get("mblog", {}).get("id") for note_item in all_notes_list if note_item.get("mblog", {}).get("id")]

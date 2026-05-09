@@ -322,6 +322,7 @@ class KuaiShouClient(AbstractApiClient, ProxyRefreshMixin):
         user_id: str,
         crawl_interval: float = 1.0,
         callback: Optional[Callable] = None,
+        max_count: int = 0,
     ) -> List[Dict]:
         """
         Get all posts published by the specified user, this method will continue to find all post information under a user
@@ -335,7 +336,7 @@ class KuaiShouClient(AbstractApiClient, ProxyRefreshMixin):
         result = []
         pcursor = ""
 
-        while pcursor != "no_more":
+        while pcursor != "no_more" and (max_count <= 0 or len(result) < max_count):
             videos_res = await self.get_video_by_creater(user_id, pcursor)
             if not videos_res:
                 utils.logger.error(
@@ -347,6 +348,8 @@ class KuaiShouClient(AbstractApiClient, ProxyRefreshMixin):
             pcursor = vision_profile_photo_list.get("pcursor", "")
 
             videos = vision_profile_photo_list.get("feeds", [])
+            if max_count > 0 and len(result) + len(videos) > max_count:
+                videos = videos[: max_count - len(result)]
             utils.logger.info(
                 f"[KuaiShouClient.get_all_videos_by_creator] got user_id:{user_id} videos len : {len(videos)}"
             )

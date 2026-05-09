@@ -216,6 +216,7 @@ class XiaoHongShuCrawler(AbstractCrawler):
                 callback=self.fetch_creator_notes_detail,
                 xsec_token=creator_info.xsec_token,
                 xsec_source=creator_info.xsec_source,
+                max_count=config.CRAWLER_MAX_NOTES_COUNT_PER_CREATOR,
             )
 
             note_ids = []
