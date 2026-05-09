@@ -19,6 +19,7 @@
 
 
 import os
+import platform
 
 # mysql config
 MYSQL_DB_PWD = os.getenv("MYSQL_DB_PWD", "12345678")
@@ -26,6 +27,13 @@ MYSQL_DB_USER = os.getenv("MYSQL_DB_USER", "root")
 MYSQL_DB_HOST = os.getenv("MYSQL_DB_HOST", "localhost")
 MYSQL_DB_PORT = os.getenv("MYSQL_DB_PORT", 3306)
 MYSQL_DB_NAME = os.getenv("MYSQL_DB_NAME", "short_video")
+# Async mysql driver used by SQLAlchemy:
+# - Windows defaults to aiomysql to avoid asyncmy large-integer compatibility issues.
+# - macOS/Linux defaults to asyncmy for backward compatibility.
+MYSQL_ASYNC_DRIVER = os.getenv(
+    "MYSQL_ASYNC_DRIVER",
+    "aiomysql" if platform.system() == "Windows" else "asyncmy",
+)
 
 mysql_db_config = {
     "user": MYSQL_DB_USER,
@@ -33,6 +41,7 @@ mysql_db_config = {
     "host": MYSQL_DB_HOST,
     "port": MYSQL_DB_PORT,
     "db_name": MYSQL_DB_NAME,
+    "async_driver": MYSQL_ASYNC_DRIVER,
 }
 
 

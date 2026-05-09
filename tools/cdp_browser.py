@@ -430,6 +430,12 @@ class CDPBrowserManager:
             force: Whether to force cleanup browser process (ignoring AUTO_CLOSE_BROWSER config)
         """
         try:
+            if not force and not config.AUTO_CLOSE_BROWSER:
+                utils.logger.info(
+                    "[CDPBrowserManager] Skip browser cleanup (AUTO_CLOSE_BROWSER=False)"
+                )
+                return
+
             # Close browser context
             if self.browser_context:
                 try:

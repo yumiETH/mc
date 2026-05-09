@@ -28,10 +28,22 @@ from config.db_config import mysql_db_config, sqlite_db_config, postgres_db_conf
 _engines = {}
 
 
+def _build_mysql_url(with_db: bool = True) -> str:
+    """Build MySQL async URL with configurable SQLAlchemy driver."""
+    mysql_driver = mysql_db_config.get("async_driver", "asyncmy")
+    base_url = (
+        f"mysql+{mysql_driver}://{mysql_db_config['user']}:{mysql_db_config['password']}"
+        f"@{mysql_db_config['host']}:{mysql_db_config['port']}"
+    )
+    if with_db:
+        return f"{base_url}/{mysql_db_config['db_name']}"
+    return base_url
+
+
 async def create_database_if_not_exists(db_type: str):
     if db_type == "mysql" or db_type == "db":
         # Connect to the server without a database
-        server_url = f"mysql+asyncmy://{mysql_db_config['user']}:{mysql_db_config['password']}@{mysql_db_config['host']}:{mysql_db_config['port']}"
+        server_url = _build_mysql_url(with_db=False)
         engine = create_async_engine(server_url, echo=False)
         async with engine.connect() as conn:
             await conn.execute(text(f"CREATE DATABASE IF NOT EXISTS {mysql_db_config['db_name']}"))
@@ -63,7 +75,7 @@ def get_async_engine(db_type: str = None):
     if db_type == "sqlite":
         db_url = f"sqlite+aiosqlite:///{sqlite_db_config['db_path']}"
     elif db_type == "mysql" or db_type == "db":
-        db_url = f"mysql+asyncmy://{mysql_db_config['user']}:{mysql_db_config['password']}@{mysql_db_config['host']}:{mysql_db_config['port']}/{mysql_db_config['db_name']}"
+        db_url = _build_mysql_url(with_db=True)
     elif db_type == "postgres":
         db_url = f"postgresql+asyncpg://{postgres_db_config['user']}:{postgres_db_config['password']}@{postgres_db_config['host']}:{postgres_db_config['port']}/{postgres_db_config['db_name']}"
     else:

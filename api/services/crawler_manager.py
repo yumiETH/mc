@@ -374,6 +374,12 @@ class CrawlerManager:
         if config.cookies:
             cmd.extend(["--cookies", config.cookies])
 
+        if config.max_notes_count_per_creator is not None:
+            cmd.extend(["--max_notes_count_per_creator", str(config.max_notes_count_per_creator)])
+
+        if config.auto_close_browser is not None:
+            cmd.extend(["--auto_close_browser", "true" if config.auto_close_browser else "false"])
+
         cmd.extend(["--headless", "true" if config.headless else "false"])
 
         return cmd

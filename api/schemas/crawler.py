@@ -71,6 +71,8 @@ class CrawlerStartRequest(BaseModel):
     save_option: SaveDataOptionEnum = SaveDataOptionEnum.JSONL
     cookies: str = ""
     headless: bool = False
+    max_notes_count_per_creator: Optional[int] = None
+    auto_close_browser: Optional[bool] = None
 
 
 class CrawlerStatusResponse(BaseModel):
