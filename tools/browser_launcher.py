@@ -20,7 +20,6 @@
 
 import os
 import platform
-import re
 import subprocess
 import time
 import socket
@@ -217,13 +216,17 @@ class BrowserLauncher:
                     errors="ignore",
                     timeout=10,
                 )
-                port_pattern = re.compile(
-                    rf"^\s*TCP\s+127\.0\.0\.1:{self.debug_port}\s+.*LISTENING\s+(\d+)\s*$",
-                    re.MULTILINE,
-                )
-                match = port_pattern.search(result.stdout)
-                if match:
-                    return int(match.group(1))
+                # Windows may expose the listening endpoint as 127.0.0.1:PORT,
+                # 0.0.0.0:PORT or [::]:PORT depending on Chrome and system config.
+                for line in result.stdout.splitlines():
+                    parts = line.split()
+                    if len(parts) < 5:
+                        continue
+                    protocol, local_addr, _remote_addr, state, pid = parts[:5]
+                    if protocol.upper() != "TCP" or state.upper() != "LISTENING":
+                        continue
+                    if local_addr.endswith(f":{self.debug_port}") or local_addr.endswith(f"]:{self.debug_port}"):
+                        return int(pid)
             else:
                 result = subprocess.run(
                     ["lsof", "-ti", f"tcp:{self.debug_port}"],
