@@ -5,81 +5,115 @@
 # Repository: https://github.com/NanmiCoder/MediaCrawler/blob/main/api/services/crawler_manager.py
 # GitHub: https://github.com/NanmiCoder
 # Licensed under NON-COMMERCIAL LEARNING LICENSE 1.1
-#
-# 声明：本代码仅供学习和研究目的使用。使用者应遵守以下原则：
-# 1. 不得用于任何商业用途。
-# 2. 使用时应遵守目标平台的使用条款和robots.txt规则。
-# 3. 不得进行大规模爬取或对平台造成运营干扰。
-# 4. 应合理控制请求频率，避免给目标平台带来不必要的负担。
-# 5. 不得用于任何非法或不当的用途。
-#
-# 详细许可条款请参阅项目根目录下的LICENSE文件。
-# 使用本代码即表示您同意遵守上述原则和LICENSE中的所有条款。
 
 import asyncio
 import json
-import subprocess
-import signal
 import os
+import signal
+import subprocess
 import uuid
-from typing import Optional, List, Dict, Any
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from ..schemas import CrawlerStartRequest, LogEntry
 
 QR_CODE_EVENT_PREFIX = "MEDIACRAWLER_EVENT:"
 
 
+@dataclass
+class CrawlerTaskState:
+    """Runtime state for one platform task."""
+
+    platform: str
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    process: Optional[subprocess.Popen] = None
+    status: str = "idle"
+    started_at: Optional[datetime] = None
+    current_config: Optional[CrawlerStartRequest] = None
+    task_id: Optional[str] = None
+    latest_qrcode: Optional[Dict[str, Any]] = None
+    qrcode_required: bool = False
+    qrcode_not_required: bool = False
+    qrcode_event: Optional[asyncio.Event] = None
+    log_id: int = 0
+    logs: List[LogEntry] = field(default_factory=list)
+    read_task: Optional[asyncio.Task] = None
+
+
 class CrawlerManager:
-    """Crawler process manager"""
+    """Crawler process manager.
+
+    Rule:
+    - Same platform: only one running task.
+    - Different platforms: can run concurrently.
+    """
 
     def __init__(self):
-        self._lock = asyncio.Lock()
-        self.process: Optional[subprocess.Popen] = None
-        self.status = "idle"
-        self.started_at: Optional[datetime] = None
-        self.current_config: Optional[CrawlerStartRequest] = None
-        self.task_id: Optional[str] = None
-        self.latest_qrcode: Optional[Dict[str, Any]] = None
-        self.qrcode_required = False
-        self.qrcode_not_required = False
-        self._qrcode_event: Optional[asyncio.Event] = None
-        self._log_id = 0
-        self._logs: List[LogEntry] = []
-        self._read_task: Optional[asyncio.Task] = None
-        # Project root directory
+        self._states: Dict[str, CrawlerTaskState] = {}
         self._project_root = Path(__file__).parent.parent.parent
-        # Log queue - for pushing to WebSocket
         self._log_queue: Optional[asyncio.Queue] = None
+        self._state_guard = asyncio.Lock()
+        self._last_active_platform: Optional[str] = None
+
+    def _get_or_create_state(self, platform: str) -> CrawlerTaskState:
+        state = self._states.get(platform)
+        if state is None:
+            state = CrawlerTaskState(platform=platform)
+            self._states[platform] = state
+        return state
+
+    def _resolve_platform(self, platform: Optional[str]) -> Optional[str]:
+        if platform:
+            return platform
+
+        # Prefer last active running platform to keep old API behavior stable.
+        if self._last_active_platform:
+            state = self._states.get(self._last_active_platform)
+            if state and state.process and state.process.poll() is None:
+                return self._last_active_platform
+
+        for key, state in self._states.items():
+            if state.process and state.process.poll() is None:
+                return key
+
+        return None
+
+    @property
+    def process(self) -> Optional[subprocess.Popen]:
+        platform = self._resolve_platform(None)
+        if not platform:
+            return None
+        return self._states[platform].process
 
     @property
     def logs(self) -> List[LogEntry]:
-        return self._logs
+        platform = self._resolve_platform(None)
+        if not platform:
+            return []
+        return self._states[platform].logs
 
     def get_log_queue(self) -> asyncio.Queue:
-        """Get or create log queue"""
         if self._log_queue is None:
             self._log_queue = asyncio.Queue()
         return self._log_queue
 
-    def _create_log_entry(self, message: str, level: str = "info") -> LogEntry:
-        """Create log entry"""
-        self._log_id += 1
+    def _create_log_entry(self, state: CrawlerTaskState, message: str, level: str = "info") -> LogEntry:
+        state.log_id += 1
         entry = LogEntry(
-            id=self._log_id,
+            id=state.log_id,
             timestamp=datetime.now().strftime("%H:%M:%S"),
             level=level,
-            message=message
+            message=f"[{state.platform}] {message}",
+            platform=state.platform,
         )
-        self._logs.append(entry)
-        # Keep last 500 logs
-        if len(self._logs) > 500:
-            self._logs = self._logs[-500:]
+        state.logs.append(entry)
+        if len(state.logs) > 500:
+            state.logs = state.logs[-500:]
         return entry
 
     async def _push_log(self, entry: LogEntry):
-        """Push log to queue"""
         if self._log_queue is not None:
             try:
                 self._log_queue.put_nowait(entry)
@@ -87,21 +121,19 @@ class CrawlerManager:
                 pass
 
     def _parse_log_level(self, line: str) -> str:
-        """Parse log level"""
         line_upper = line.upper()
         if "ERROR" in line_upper or "FAILED" in line_upper:
             return "error"
-        elif "WARNING" in line_upper or "WARN" in line_upper:
+        if "WARNING" in line_upper or "WARN" in line_upper:
             return "warning"
-        elif "SUCCESS" in line_upper or "完成" in line or "成功" in line:
+        if "SUCCESS" in line_upper or "完成" in line or "成功" in line:
             return "success"
-        elif "DEBUG" in line_upper:
+        if "DEBUG" in line_upper:
             return "debug"
         return "info"
 
-    def _update_qrcode_state_from_log(self, line: str) -> None:
-        """Infer that QR code is not needed once crawler moves beyond login."""
-        if self.latest_qrcode or not self.qrcode_required:
+    def _update_qrcode_state_from_log(self, state: CrawlerTaskState, line: str) -> None:
+        if state.latest_qrcode or not state.qrcode_required:
             return
 
         login_skipped_markers = (
@@ -114,12 +146,11 @@ class CrawlerManager:
             "Crawler finished",
         )
         if any(marker in line for marker in login_skipped_markers):
-            self.qrcode_not_required = True
-            if self._qrcode_event:
-                self._qrcode_event.set()
+            state.qrcode_not_required = True
+            if state.qrcode_event:
+                state.qrcode_event.set()
 
-    def _handle_structured_event(self, line: str) -> bool:
-        """Handle structured child-process events and hide them from normal logs."""
+    def _handle_structured_event(self, state: CrawlerTaskState, line: str) -> bool:
         if not line.startswith(QR_CODE_EVENT_PREFIX):
             return False
 
@@ -130,10 +161,10 @@ class CrawlerManager:
             return True
 
         if payload.get("event") == "login_qrcode":
-            self.latest_qrcode = payload
-            if self._qrcode_event:
-                self._qrcode_event.set()
-            entry = self._create_log_entry("Login QR code captured, waiting for scan.", "success")
+            state.latest_qrcode = payload
+            if state.qrcode_event:
+                state.qrcode_event.set()
+            entry = self._create_log_entry(state, "Login QR code captured, waiting for scan.", "success")
             try:
                 queue = self.get_log_queue()
                 queue.put_nowait(entry)
@@ -142,169 +173,184 @@ class CrawlerManager:
 
         return True
 
-    async def wait_for_qrcode(self, timeout_seconds: float = 30.0) -> Optional[Dict[str, Any]]:
-        """Wait for a QR code event from the current crawler task."""
-        if self.latest_qrcode:
-            return self.latest_qrcode
+    async def wait_for_qrcode(self, timeout_seconds: float = 30.0, platform: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        platform = self._resolve_platform(platform)
+        if not platform:
+            return None
 
-        if self.qrcode_not_required or not self._qrcode_event:
+        state = self._states[platform]
+        if state.latest_qrcode:
+            return state.latest_qrcode
+        if state.qrcode_not_required or not state.qrcode_event:
             return None
 
         try:
-            await asyncio.wait_for(self._qrcode_event.wait(), timeout=timeout_seconds)
+            await asyncio.wait_for(state.qrcode_event.wait(), timeout=timeout_seconds)
         except asyncio.TimeoutError:
-            return self.latest_qrcode
+            return state.latest_qrcode
 
-        return self.latest_qrcode
+        return state.latest_qrcode
 
     async def start(self, config: CrawlerStartRequest) -> bool:
-        """Start crawler process"""
-        async with self._lock:
-            if self.process and self.process.poll() is None:
+        platform = config.platform.value
+        state = self._get_or_create_state(platform)
+
+        async with state.lock:
+            if state.process and state.process.poll() is None:
                 return False
 
-            # Clear old logs
-            self._logs = []
-            self._log_id = 0
+            state.logs = []
+            state.log_id = 0
 
-            # Clear pending queue (don't replace object to avoid WebSocket broadcast coroutine holding old queue reference)
-            if self._log_queue is None:
-                self._log_queue = asyncio.Queue()
-            else:
-                try:
-                    while True:
-                        self._log_queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
-
-            # Build command line arguments
             cmd = self._build_command(config)
-            self.task_id = uuid.uuid4().hex
-            self.latest_qrcode = None
-            self.qrcode_required = (
-                config.login_type.value == "qrcode" and not config.cookies
-            )
-            self.qrcode_not_required = False
-            self._qrcode_event = asyncio.Event()
+            state.task_id = uuid.uuid4().hex
+            state.latest_qrcode = None
+            state.qrcode_required = (config.login_type.value == "qrcode" and not config.cookies)
+            state.qrcode_not_required = False
+            state.qrcode_event = asyncio.Event()
 
-            # Log start information
-            entry = self._create_log_entry(f"Starting crawler: {' '.join(cmd)}", "info")
+            entry = self._create_log_entry(state, f"Starting crawler: {' '.join(cmd)}", "info")
             await self._push_log(entry)
 
             try:
-                # Start subprocess
-                self.process = subprocess.Popen(
+                state.process = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
-                    encoding='utf-8',
+                    encoding="utf-8",
                     bufsize=1,
                     cwd=str(self._project_root),
                     env={
                         **os.environ,
                         "PYTHONUNBUFFERED": "1",
                         "MEDIACRAWLER_QR_OUTPUT": "api",
-                        "MEDIACRAWLER_TASK_ID": self.task_id,
-                        "MEDIACRAWLER_TASK_PLATFORM": config.platform.value,
-                    }
+                        "MEDIACRAWLER_TASK_ID": state.task_id,
+                        "MEDIACRAWLER_TASK_PLATFORM": platform,
+                    },
                 )
-
-                self.status = "running"
-                self.started_at = datetime.now()
-                self.current_config = config
+                state.status = "running"
+                state.started_at = datetime.now()
+                state.current_config = config
 
                 entry = self._create_log_entry(
-                    f"Crawler started on platform: {config.platform.value}, type: {config.crawler_type.value}",
-                    "success"
+                    state,
+                    f"Crawler started on platform: {platform}, type: {config.crawler_type.value}",
+                    "success",
                 )
                 await self._push_log(entry)
 
-                # Start log reading task
-                self._read_task = asyncio.create_task(self._read_output())
-
+                state.read_task = asyncio.create_task(self._read_output(platform))
+                self._last_active_platform = platform
                 return True
             except Exception as e:
-                self.status = "error"
-                self.task_id = None
-                self.qrcode_required = False
-                self.qrcode_not_required = False
-                self._qrcode_event = None
-                entry = self._create_log_entry(f"Failed to start crawler: {str(e)}", "error")
+                state.status = "error"
+                state.task_id = None
+                state.qrcode_required = False
+                state.qrcode_not_required = False
+                state.qrcode_event = None
+                entry = self._create_log_entry(state, f"Failed to start crawler: {str(e)}", "error")
                 await self._push_log(entry)
                 return False
 
-    async def stop(self) -> bool:
-        """Stop crawler process"""
-        async with self._lock:
-            if not self.process or self.process.poll() is not None:
+    async def stop(self, platform: Optional[str] = None) -> bool:
+        platform = self._resolve_platform(platform)
+        if not platform:
+            return False
+
+        state = self._states[platform]
+        async with state.lock:
+            if not state.process or state.process.poll() is not None:
                 return False
 
-            self.status = "stopping"
-            entry = self._create_log_entry("Sending SIGTERM to crawler process...", "warning")
+            state.status = "stopping"
+            entry = self._create_log_entry(state, "Sending SIGTERM to crawler process...", "warning")
             await self._push_log(entry)
 
             try:
-                self.process.send_signal(signal.SIGTERM)
+                state.process.send_signal(signal.SIGTERM)
 
-                # Wait for graceful exit (up to 15 seconds)
                 for _ in range(30):
-                    if self.process.poll() is not None:
+                    if state.process.poll() is not None:
                         break
                     await asyncio.sleep(0.5)
 
-                # If still not exited, force kill
-                if self.process.poll() is None:
-                    entry = self._create_log_entry("Process not responding, sending SIGKILL...", "warning")
+                if state.process.poll() is None:
+                    entry = self._create_log_entry(state, "Process not responding, sending SIGKILL...", "warning")
                     await self._push_log(entry)
-                    self.process.kill()
+                    state.process.kill()
 
-                entry = self._create_log_entry("Crawler process terminated", "info")
+                entry = self._create_log_entry(state, "Crawler process terminated", "info")
                 await self._push_log(entry)
-
             except Exception as e:
-                entry = self._create_log_entry(f"Error stopping crawler: {str(e)}", "error")
+                entry = self._create_log_entry(state, f"Error stopping crawler: {str(e)}", "error")
                 await self._push_log(entry)
 
-            self.status = "idle"
-            self.current_config = None
-            self.task_id = None
-            self.qrcode_required = False
-            self.qrcode_not_required = False
-            self._qrcode_event = None
-
-            # Cancel log reading task
-            if self._read_task:
-                self._read_task.cancel()
-                self._read_task = None
-
+            self._reset_state_runtime(state)
             return True
 
-    def get_status(self) -> dict:
-        """Get current status"""
+    def _status_dict(self, state: CrawlerTaskState) -> dict:
         return {
-            "status": self.status,
-            "task_id": self.task_id,
-            "platform": self.current_config.platform.value if self.current_config else None,
-            "crawler_type": self.current_config.crawler_type.value if self.current_config else None,
-            "started_at": self.started_at.isoformat() if self.started_at else None,
-            "error_message": None
+            "status": state.status,
+            "task_id": state.task_id,
+            "platform": state.current_config.platform.value if state.current_config else state.platform,
+            "crawler_type": state.current_config.crawler_type.value if state.current_config else None,
+            "started_at": state.started_at.isoformat() if state.started_at else None,
+            "error_message": None,
         }
 
-    def get_latest_qrcode(self) -> Optional[Dict[str, Any]]:
-        """Get latest QR code event for current crawler task."""
-        return self.latest_qrcode
+    def get_status(self, platform: Optional[str] = None) -> dict:
+        platform = self._resolve_platform(platform)
+        if platform and platform in self._states:
+            status = self._status_dict(self._states[platform])
+        else:
+            status = {
+                "status": "idle",
+                "task_id": None,
+                "platform": None,
+                "crawler_type": None,
+                "started_at": None,
+                "error_message": None,
+            }
 
-    def is_qrcode_pending(self) -> bool:
-        """Return whether current task may still emit a QR code."""
-        if self.latest_qrcode:
+        platforms = {name: self._status_dict(state) for name, state in self._states.items()}
+        status["platforms"] = platforms
+        status["running_count"] = sum(1 for s in self._states.values() if s.process and s.process.poll() is None)
+        return status
+
+    def get_latest_qrcode(self, platform: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        platform = self._resolve_platform(platform)
+        if not platform:
+            return None
+        return self._states[platform].latest_qrcode
+
+    def is_qrcode_pending(self, platform: Optional[str] = None) -> bool:
+        platform = self._resolve_platform(platform)
+        if not platform:
             return False
-        if not self.qrcode_required or self.qrcode_not_required:
+
+        state = self._states[platform]
+        if state.latest_qrcode:
             return False
-        return bool(self.process and self.process.poll() is None)
+        if not state.qrcode_required or state.qrcode_not_required:
+            return False
+        return bool(state.process and state.process.poll() is None)
+
+    def get_logs(self, platform: Optional[str] = None, limit: int = 100) -> List[LogEntry]:
+        if platform:
+            state = self._states.get(platform)
+            if not state:
+                return []
+            logs = state.logs
+            return logs[-limit:] if limit > 0 else logs
+
+        merged: List[LogEntry] = []
+        for state in self._states.values():
+            merged.extend(state.logs)
+        merged.sort(key=lambda x: (x.timestamp, x.id))
+        return merged[-limit:] if limit > 0 else merged
 
     def _build_command(self, config: CrawlerStartRequest) -> list:
-        """Build main.py command line arguments"""
         cmd = ["uv", "run", "python", "main.py"]
 
         cmd.extend(["--platform", config.platform.value])
@@ -312,7 +358,6 @@ class CrawlerManager:
         cmd.extend(["--type", config.crawler_type.value])
         cmd.extend(["--save_data_option", config.save_option.value])
 
-        # Pass different arguments based on crawler type
         if config.crawler_type.value == "search" and config.keywords:
             cmd.extend(["--keywords", config.keywords])
         elif config.crawler_type.value == "detail" and config.specified_ids:
@@ -333,63 +378,64 @@ class CrawlerManager:
 
         return cmd
 
-    async def _read_output(self):
-        """Asynchronously read process output"""
+    def _reset_state_runtime(self, state: CrawlerTaskState):
+        state.status = "idle"
+        state.current_config = None
+        state.task_id = None
+        state.qrcode_required = False
+        state.qrcode_not_required = False
+        state.qrcode_event = None
+        if state.read_task:
+            state.read_task.cancel()
+            state.read_task = None
+
+    async def _read_output(self, platform: str):
+        state = self._states.get(platform)
+        if not state:
+            return
+
         loop = asyncio.get_event_loop()
 
         try:
-            while self.process and self.process.poll() is None:
-                # Read a line in thread pool
-                line = await loop.run_in_executor(
-                    None, self.process.stdout.readline
-                )
+            while state.process and state.process.poll() is None:
+                line = await loop.run_in_executor(None, state.process.stdout.readline)
                 if line:
                     line = line.strip()
                     if line:
-                        if self._handle_structured_event(line):
+                        if self._handle_structured_event(state, line):
                             continue
-                        self._update_qrcode_state_from_log(line)
+                        self._update_qrcode_state_from_log(state, line)
                         level = self._parse_log_level(line)
-                        entry = self._create_log_entry(line, level)
+                        entry = self._create_log_entry(state, line, level)
                         await self._push_log(entry)
 
-            # Read remaining output
-            if self.process and self.process.stdout:
-                remaining = await loop.run_in_executor(
-                    None, self.process.stdout.read
-                )
+            if state.process and state.process.stdout:
+                remaining = await loop.run_in_executor(None, state.process.stdout.read)
                 if remaining:
-                    for line in remaining.strip().split('\n'):
+                    for line in remaining.strip().split("\n"):
                         if line.strip():
                             line = line.strip()
-                            if self._handle_structured_event(line):
+                            if self._handle_structured_event(state, line):
                                 continue
-                            self._update_qrcode_state_from_log(line)
+                            self._update_qrcode_state_from_log(state, line)
                             level = self._parse_log_level(line)
-                            entry = self._create_log_entry(line, level)
+                            entry = self._create_log_entry(state, line, level)
                             await self._push_log(entry)
 
-            # Process ended
-            if self.status == "running":
-                exit_code = self.process.returncode if self.process else -1
+            if state.status == "running":
+                exit_code = state.process.returncode if state.process else -1
                 if exit_code == 0:
-                    entry = self._create_log_entry("Crawler completed successfully", "success")
+                    entry = self._create_log_entry(state, "Crawler completed successfully", "success")
                 else:
-                    entry = self._create_log_entry(f"Crawler exited with code: {exit_code}", "warning")
+                    entry = self._create_log_entry(state, f"Crawler exited with code: {exit_code}", "warning")
                 await self._push_log(entry)
-                self.status = "idle"
-                self.current_config = None
-                self.task_id = None
-                self.qrcode_required = False
-                self.qrcode_not_required = False
-                self._qrcode_event = None
+                self._reset_state_runtime(state)
 
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            entry = self._create_log_entry(f"Error reading output: {str(e)}", "error")
+            entry = self._create_log_entry(state, f"Error reading output: {str(e)}", "error")
             await self._push_log(entry)
 
 
-# Global singleton
 crawler_manager = CrawlerManager()

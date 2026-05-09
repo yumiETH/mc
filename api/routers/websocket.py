@@ -17,7 +17,7 @@
 # 使用本代码即表示您同意遵守上述原则和LICENSE中的所有条款。
 
 import asyncio
-from typing import Set, Optional
+from typing import Optional, Set
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -98,15 +98,17 @@ async def websocket_logs(websocket: WebSocket):
         await manager.connect(websocket)
         print(f"[WS] Connected, active connections: {len(manager.active_connections)}")
 
+        platform = websocket.query_params.get("platform")
+
         # Send existing logs
-        for log in crawler_manager.logs:
+        for log in crawler_manager.get_logs(platform=platform, limit=0):
             try:
                 await websocket.send_json(log.model_dump())
             except Exception as e:
                 print(f"[WS] Error sending existing log: {e}")
                 break
 
-        print(f"[WS] Sent {len(crawler_manager.logs)} existing logs, entering main loop")
+        print(f"[WS] Sent existing logs, entering main loop")
 
         while True:
             # Keep connection alive, receive heartbeat or any message
@@ -138,11 +140,12 @@ async def websocket_logs(websocket: WebSocket):
 async def websocket_status(websocket: WebSocket):
     """WebSocket status stream"""
     await websocket.accept()
+    platform = websocket.query_params.get("platform")
 
     try:
         while True:
             # Send status every second
-            status = crawler_manager.get_status()
+            status = crawler_manager.get_status(platform=platform)
             await websocket.send_json(status)
             await asyncio.sleep(1)
     except WebSocketDisconnect:

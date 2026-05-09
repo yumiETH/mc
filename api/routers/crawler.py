@@ -16,9 +16,11 @@
 # 详细许可条款请参阅项目根目录下的LICENSE文件。
 # 使用本代码即表示您同意遵守上述原则和LICENSE中的所有条款。
 
-from fastapi import APIRouter, HTTPException
+from typing import Optional
 
-from ..schemas import CrawlerStartRequest, CrawlerStatusResponse
+from fastapi import APIRouter, HTTPException, Query
+
+from ..schemas import CrawlerStartRequest
 from ..services import crawler_manager
 
 router = APIRouter(prefix="/crawler", tags=["crawler"])
@@ -29,55 +31,59 @@ async def start_crawler(request: CrawlerStartRequest):
     """Start crawler task"""
     success = await crawler_manager.start(request)
     if not success:
-        # Handle concurrent/duplicate requests: if process is already running, return 400 instead of 500
-        if crawler_manager.process and crawler_manager.process.poll() is None:
-            raise HTTPException(status_code=400, detail="Crawler is already running")
+        # Same platform is single-task mode.
+        status = crawler_manager.get_status(request.platform.value)
+        if status.get("status") == "running":
+            raise HTTPException(status_code=400, detail=f"Crawler is already running on platform: {request.platform.value}")
         raise HTTPException(status_code=500, detail="Failed to start crawler")
 
     qrcode = None
     qrcode_status = "not_required"
     if request.login_type.value == "qrcode" and not request.cookies:
-        qrcode = await crawler_manager.wait_for_qrcode()
+        qrcode = await crawler_manager.wait_for_qrcode(platform=request.platform.value)
         if qrcode:
             qrcode_status = "ready"
-        elif crawler_manager.is_qrcode_pending():
+        elif crawler_manager.is_qrcode_pending(platform=request.platform.value):
             qrcode_status = "pending"
 
     return {
         "status": "ok",
         "message": "Crawler started successfully",
-        "task_id": crawler_manager.task_id,
+        "platform": request.platform.value,
+        "task_id": crawler_manager.get_status(request.platform.value).get("task_id"),
         "qrcode_status": qrcode_status,
         "qrcode": qrcode,
     }
 
 
 @router.post("/stop")
-async def stop_crawler():
+async def stop_crawler(platform: Optional[str] = Query(default=None, description="Platform code, e.g. dy/xhs")):
     """Stop crawler task"""
-    success = await crawler_manager.stop()
+    success = await crawler_manager.stop(platform=platform)
     if not success:
-        # Handle concurrent/duplicate requests: if process already exited/doesn't exist, return 400 instead of 500
-        if not crawler_manager.process or crawler_manager.process.poll() is not None:
-            raise HTTPException(status_code=400, detail="No crawler is running")
-        raise HTTPException(status_code=500, detail="Failed to stop crawler")
+        if platform:
+            raise HTTPException(status_code=400, detail=f"No crawler is running on platform: {platform}")
+        raise HTTPException(status_code=400, detail="No crawler is running")
 
-    return {"status": "ok", "message": "Crawler stopped successfully"}
+    return {"status": "ok", "message": "Crawler stopped successfully", "platform": platform}
 
 
-@router.get("/status", response_model=CrawlerStatusResponse)
-async def get_crawler_status():
+@router.get("/status")
+async def get_crawler_status(platform: Optional[str] = Query(default=None, description="Platform code, e.g. dy/xhs")):
     """Get crawler status"""
-    return crawler_manager.get_status()
+    return crawler_manager.get_status(platform=platform)
 
 
 @router.get("/qrcode")
-async def get_login_qrcode(wait: float = 0):
+async def get_login_qrcode(
+    wait: float = 0,
+    platform: Optional[str] = Query(default=None, description="Platform code, e.g. dy/xhs"),
+):
     """Get latest login QR code for current crawler task"""
     qrcode = (
-        await crawler_manager.wait_for_qrcode(timeout_seconds=wait)
+        await crawler_manager.wait_for_qrcode(timeout_seconds=wait, platform=platform)
         if wait > 0
-        else crawler_manager.get_latest_qrcode()
+        else crawler_manager.get_latest_qrcode(platform=platform)
     )
     if not qrcode:
         raise HTTPException(status_code=404, detail="QR code is not ready")
@@ -85,7 +91,10 @@ async def get_login_qrcode(wait: float = 0):
 
 
 @router.get("/logs")
-async def get_logs(limit: int = 100):
+async def get_logs(
+    limit: int = 100,
+    platform: Optional[str] = Query(default=None, description="Platform code, e.g. dy/xhs"),
+):
     """Get recent logs"""
-    logs = crawler_manager.logs[-limit:] if limit > 0 else crawler_manager.logs
+    logs = crawler_manager.get_logs(platform=platform, limit=limit)
     return {"logs": [log.model_dump() for log in logs]}
