@@ -47,8 +47,7 @@ class CrawlerManager:
     """Crawler process manager.
 
     Rule:
-    - Same platform: only one running task.
-    - Different platforms: can run concurrently.
+    - Global single-task mode: only one crawler task can run at any time.
     """
 
     def __init__(self):
@@ -79,6 +78,13 @@ class CrawlerManager:
             if state.process and state.process.poll() is None:
                 return key
 
+        return None
+
+    def _get_running_state(self) -> Optional[CrawlerTaskState]:
+        """Return the currently running task state if exists."""
+        for state in self._states.values():
+            if state.process and state.process.poll() is None:
+                return state
         return None
 
     @property
@@ -196,7 +202,15 @@ class CrawlerManager:
         platform = config.platform.value
         state = self._get_or_create_state(platform)
 
-        async with state.lock:
+        async with self._state_guard:
+            running_state = self._get_running_state()
+            # 全局单任务约束：任意平台已有任务运行时，不允许再启动新任务
+            if running_state:
+                return False
+            # 锁定当前平台状态，避免并发请求同时写入同一状态对象
+            await state.lock.acquire()
+
+        try:
             if state.process and state.process.poll() is None:
                 return False
 
@@ -259,6 +273,9 @@ class CrawlerManager:
                 entry = self._create_log_entry(state, f"Failed to start crawler: {str(e)}", "error")
                 await self._push_log(entry)
                 return False
+        finally:
+            if state.lock.locked():
+                state.lock.release()
 
     async def stop(self, platform: Optional[str] = None) -> bool:
         platform = self._resolve_platform(platform)

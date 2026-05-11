@@ -123,6 +123,9 @@ class BilibiliCrawler(AbstractCrawler):
                         try:
                             creator_info = parse_creator_info_from_url(creator_url)
                             utils.logger.info(f"[BilibiliCrawler.start] Parsed creator ID: {creator_info.creator_id} from {creator_url}")
+                            # 先保存账号信息，再抓取该账号视频，避免仅有视频无账号主体数据
+                            creator_profile = await self.bili_client.get_creator_info(int(creator_info.creator_id))
+                            await bilibili_store.save_bilibili_creator(creator_profile)
                             await self.get_creator_videos(
                                 int(creator_info.creator_id),
                                 max_count=config.CRAWLER_MAX_NOTES_COUNT_PER_CREATOR,
@@ -658,6 +661,8 @@ class BilibiliCrawler(AbstractCrawler):
         """
         async with semaphore:
             creator_unhandled_info: Dict = await self.bili_client.get_creator_info(creator_id)
+            # 先落账号基础信息，再继续抓粉丝/关注/动态
+            await bilibili_store.save_bilibili_creator(creator_unhandled_info)
             creator_info: Dict = {
                 "id": creator_id,
                 "name": creator_unhandled_info.get("name"),

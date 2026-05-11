@@ -101,6 +101,40 @@ async def update_up_info(video_item: Dict):
     await BiliStoreFactory.create_store().store_creator(creator=saver_up_info)
 
 
+async def save_bilibili_creator(creator_info: Dict):
+    """
+    Save bilibili creator account info before fetching creator videos.
+
+    Compatible with:
+    1) Raw response from BilibiliClient.get_creator_info()
+    2) Normalized creator dict: {"id", "name", "sign", "avatar"}
+    """
+    if not creator_info:
+        return
+
+    raw_data = creator_info.get("data", {}) if isinstance(creator_info, dict) else {}
+    creator_id = creator_info.get("id") or raw_data.get("mid")
+    if not creator_id:
+        return
+
+    level_info = raw_data.get("level_info", {}) if isinstance(raw_data, dict) else {}
+    official_verify = raw_data.get("official", {}) if isinstance(raw_data, dict) else {}
+    local_db_item = {
+        "user_id": str(creator_id),
+        "nickname": creator_info.get("name") or raw_data.get("name"),
+        "sex": raw_data.get("sex"),
+        "sign": creator_info.get("sign") or raw_data.get("sign"),
+        "avatar": creator_info.get("avatar") or raw_data.get("face"),
+        "last_modify_ts": utils.get_current_timestamp(),
+        "total_fans": raw_data.get("fans"),
+        "total_liked": raw_data.get("likes"),
+        "user_rank": level_info.get("current_level"),
+        "is_official": official_verify.get("type", -1),
+    }
+    utils.logger.info(f"[store.bilibili.save_bilibili_creator] bilibili user_id:{local_db_item.get('user_id')}")
+    await BiliStoreFactory.create_store().store_creator(creator=local_db_item)
+
+
 async def batch_update_bilibili_video_comments(video_id: str, comments: List[Dict]):
     if not comments:
         return

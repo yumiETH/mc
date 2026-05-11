@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 from urllib.parse import urlsplit, urlunsplit
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.models import VideoAccount, VideoDetail
@@ -172,15 +172,26 @@ def _map_detail(platform: str, item: Dict, account_id: Optional[int]) -> Dict[st
 
 
 async def _get_existing_account(session: AsyncSession, account_data: Dict[str, Any], user_id: Optional[str]) -> Optional[VideoAccount]:
+    account_type = account_data.get("type")
     user_url = account_data.get("url")
     if user_url:
-        result = await session.execute(select(VideoAccount).where(VideoAccount.url == user_url))
+        result = await session.execute(
+            select(VideoAccount).where(
+                VideoAccount.url == user_url,
+                VideoAccount.type == account_type,
+            )
+        )
         account = result.scalars().first()
         if account:
             return account
 
     if user_id:
-        result = await session.execute(select(VideoAccount).where(VideoAccount.third_user_id == user_id))
+        result = await session.execute(
+            select(VideoAccount).where(
+                VideoAccount.third_user_id == user_id,
+                VideoAccount.type == account_type,
+            )
+        )
         return result.scalars().first()
 
     return None
@@ -204,14 +215,6 @@ async def upsert_video_account(session: AsyncSession, platform: str, item: Dict)
     for key, value in account_data.items():
         setattr(account, key, value)
     return account
-
-
-async def delete_video_details_by_account_id(session: AsyncSession, account_id: Optional[int]) -> int:
-    if not account_id:
-        return 0
-
-    result = await session.execute(delete(VideoDetail).where(VideoDetail.account_id == account_id))
-    return result.rowcount or 0
 
 
 async def upsert_video_detail(session: AsyncSession, platform: str, item: Dict) -> None:
@@ -246,8 +249,7 @@ async def store_video_content(session: AsyncSession, platform: str, content_item
 
 async def store_video_creator(session: AsyncSession, platform: str, creator_item: Dict) -> None:
     account = await upsert_video_account(session, platform, creator_item)
-    deleted_count = await delete_video_details_by_account_id(session, account.id if account else None)
     utils.logger.info(
         f"[video_business_store.store_video_creator] saved platform={platform}, "
-        f"account_id={account.id if account else None}, deleted_details={deleted_count}"
+        f"account_id={account.id if account else None}"
     )

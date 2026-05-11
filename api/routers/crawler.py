@@ -31,10 +31,14 @@ async def start_crawler(request: CrawlerStartRequest):
     """Start crawler task"""
     success = await crawler_manager.start(request)
     if not success:
-        # Same platform is single-task mode.
+        # 全局单任务模式：任意时刻仅允许运行一个爬虫任务。
         status = crawler_manager.get_status(request.platform.value)
-        if status.get("status") == "running":
-            raise HTTPException(status_code=400, detail=f"Crawler is already running on platform: {request.platform.value}")
+        if status.get("running_count", 0) > 0:
+            running_platform = status.get("platform")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Crawler is already running on platform: {running_platform}",
+            )
         raise HTTPException(status_code=500, detail="Failed to start crawler")
 
     qrcode = None
